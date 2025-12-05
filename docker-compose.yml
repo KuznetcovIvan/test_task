@@ -1,0 +1,69 @@
+volumes:
+  pg_data:
+  rabbit_data:
+  static_data:
+
+services:
+  db:
+    image: postgres:17
+    env_file: .env
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB} -h 127.0.0.1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  rabbit:
+    image: rabbitmq:3.13-management
+    env_file: .env
+    volumes:
+      - rabbit_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  backend:
+    build: .
+    env_file: .env
+    volumes:
+      - static_data:/app/staticfiles
+    depends_on:
+      db:
+        condition: service_healthy
+      rabbit:
+        condition: service_healthy
+
+  celery:
+    build: .
+    env_file: .env
+    command: >
+      uv run celery -A config worker -l info
+    depends_on:
+      db:
+        condition: service_healthy
+      rabbit:
+        condition: service_healthy
+
+  flower:
+    build: .
+    env_file: .env
+    command: >
+      uv run celery -A config flower --port=5555 --url_prefix=/flower
+    depends_on:
+      rabbit:
+        condition: service_healthy
+
+  gateway:
+    build: ./nginx/
+    env_file: .env
+    ports:
+      - 8000:80
+    volumes:
+      - static_data:/app/staticfiles
+      - ./docs/:/usr/share/nginx/html/api/docs/
+    depends_on:
+      - backend
